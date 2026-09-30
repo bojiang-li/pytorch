@@ -17,7 +17,14 @@
 
 namespace {
 // Short-term fix for: https://github.com/pytorch/pytorch/issues/166926
+#ifdef Py_GIL_DISABLED
+// move_to_front splices the cache list on every hit and nothing synchronises
+// it, so concurrent hits lose entries and a hot function recompiles forever.
+// Off until the list is locked; _set_lru_cache(true) still forces it back on.
+bool use_lru = false;
+#else
 bool use_lru = true;
+#endif
 } // namespace
 
 Py_ssize_t extra_index = -1;
