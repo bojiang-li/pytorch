@@ -6883,7 +6883,11 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         if factor <= 1 or factor & (factor - 1) != 0:
             raise AssertionError(f"split factor must be a power of two: {factor}")
         expr = self._bitcast_reshape_expr(value, reshape_shape, dtype)
-        permute_dims = (*range(len(reshape_shape) - 2), len(reshape_shape) - 1, len(reshape_shape) - 2)
+        permute_dims = (
+            *range(len(reshape_shape) - 2),
+            len(reshape_shape) - 1,
+            len(reshape_shape) - 2,
+        )
         transposed_shape = (
             *reshape_shape[:-2],
             reshape_shape[-1],

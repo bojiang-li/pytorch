@@ -2587,13 +2587,10 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
         self._sub_parent_family = sub_parent_family
         self._sub_parent_factor = sub_parent_factor
         has_dense_mappings = any(
-            relation.access_stride == 1
-            for relation in access_relations
+            relation.access_stride == 1 for relation in access_relations
         )
         if has_dense_mappings and (parent_numel is None or parent_rnumel is None):
-            raise AssertionError(
-                "dense affine replay requires parent extents"
-            )
+            raise AssertionError("dense affine replay requires parent extents")
         if has_dense_mappings and layout.group_tree.is_loop:
             raise AssertionError(
                 "dense affine projection requires the complete logical parent tile"
@@ -2617,8 +2614,8 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
                     )
             relations_by_name[relation.consumer_access.name].append(relation)
         self._relation_descriptors: list[_SubParentRelationDescriptor] = []
-        self._dense_descriptor_indices: dict[str, list[int]] = (
-            collections.defaultdict(list)
+        self._dense_descriptor_indices: dict[str, list[int]] = collections.defaultdict(
+            list
         )
         for relation in access_relations:
             access_stride = relation.access_stride
@@ -2635,8 +2632,12 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
                 raise AssertionError("affine relation is missing parent extents")
             source_extent = sympy_product(relation.source_accesses[0].size)
             parent_extent = parent_numel * parent_rnumel
-            if not V.graph.sizevars.statically_known_equals(source_extent, parent_extent):
-                raise AssertionError("dense affine source does not cover the parent frame")
+            if not V.graph.sizevars.statically_known_equals(
+                source_extent, parent_extent
+            ):
+                raise AssertionError(
+                    "dense affine source does not cover the parent frame"
+                )
             consumer_extent = sympy_product(relation.consumer_access.size)
             if not V.graph.sizevars.statically_known_multiple_of(
                 consumer_extent, parent_numel
@@ -2695,11 +2696,7 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
                 [
                     "direct"
                     if relation.access_stride is None
-                    else (
-                        "dense"
-                        if relation.access_stride == 1
-                        else "interleaved"
-                    )
+                    else ("dense" if relation.access_stride == 1 else "interleaved")
                     for relation in relations
                 ]
             )
@@ -2963,9 +2960,7 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
                         descriptor.parent_shape[0],
                         descriptor.child_shape[1],
                     )
-                    and V.graph.sizevars.statically_known_equals(
-                        replay_index, index
-                    )
+                    and V.graph.sizevars.statically_known_equals(replay_index, index)
                     for read, replay_index in replay_accesses
                 )
             ]
@@ -3316,8 +3311,7 @@ class SIMDScheduling(BaseScheduling):
                     return False
 
             if reduction_can_fuse and any(
-                self._is_standalone_staged_reduction(node)
-                for node in (node1, node2)
+                self._is_standalone_staged_reduction(node) for node in (node1, node2)
             ):
                 nodes = [*node1.get_nodes(), *node2.get_nodes()]
                 if self._find_sub_parent_epilogue_plan(nodes) is None:
@@ -3546,7 +3540,7 @@ class SIMDScheduling(BaseScheduling):
             for relation in stage.access_relations
         )
         if has_dense_mappings and any(
-            node.get_device() is None or node.get_device().type != "cuda"
+            (device := node.get_device()) is None or device.type != "cuda"
             for node in nodes
         ):
             return None
@@ -3566,9 +3560,7 @@ class SIMDScheduling(BaseScheduling):
                 continue
             _, (node_numel, node_rnumel) = parent_node.group
             if (
-                V.graph.sizevars.statically_known_equals(
-                    node_numel, plan.parent_numel
-                )
+                V.graph.sizevars.statically_known_equals(node_numel, plan.parent_numel)
                 and V.graph.sizevars.statically_known_equals(
                     node_rnumel, plan.parent_rnumel
                 )
@@ -3646,7 +3638,12 @@ class SIMDScheduling(BaseScheduling):
         return None
 
     def generate_node_schedule(
-        self, nodes, numel, rnumel, *, required_post_reduction_index=None,
+        self,
+        nodes,
+        numel,
+        rnumel,
+        *,
+        required_post_reduction_index=None,
         group_extent_subs=None,
     ):
         """Build a schedule, optionally requiring a main-body suffix after a reduction."""
@@ -4654,8 +4651,7 @@ class SIMDScheduling(BaseScheduling):
             raise AssertionError("expected one standalone sub-parent stage")
         stage = plan.sub_parent_stages[0]
         has_dense_mappings = any(
-            relation.access_stride == 1
-            for relation in stage.access_relations
+            relation.access_stride == 1 for relation in stage.access_relations
         )
         numel = plan.parent_numel
         rnumel = plan.parent_rnumel
@@ -4663,9 +4659,7 @@ class SIMDScheduling(BaseScheduling):
         sub_parent_epilogue_nodes = stage.epilogue_nodes
         parent_nodes = list(plan.parent_nodes)
         group_extent_subs = (
-            self._dense_group_extent_subs(plan)
-            if has_dense_mappings
-            else {}
+            self._dense_group_extent_subs(plan) if has_dense_mappings else {}
         )
         required_replay_relations = tuple(
             relation

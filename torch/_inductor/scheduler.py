@@ -133,15 +133,13 @@ def affine_proof_strides(
     Returns:
         The affine strides, or None if the access is not affine.
     """
-    zero = {var: sympy.S.Zero for var in dep.var_names}
+    zero = dict.fromkeys(dep.var_names, sympy.S.Zero)
     offset = sympy_subs(dep.index, zero)
     strides = []
     for var in dep.var_names:
         one = dict(zero)
         one[var] = sympy.S.One
-        strides.append(
-            context.simplify(sympy_subs(dep.index, one) - offset)
-        )
+        strides.append(context.simplify(sympy_subs(dep.index, one) - offset))
     reconstructed = offset + sum(
         (stride * var for stride, var in zip(strides, dep.var_names)),
         sympy.S.Zero,
@@ -183,8 +181,7 @@ def prove_translation_pair(
     # Dense row-major strides: each axis steps over all trailing dimensions.
     # The innermost axis therefore has stride 1.
     expected_strides = tuple(
-        sympy_product(producer.size[axis + 1 :])
-        for axis in range(producer.num_vars)
+        sympy_product(producer.size[axis + 1 :]) for axis in range(producer.num_vars)
     )
     if any(
         not context.statically_known_equals(coefficient, expected)
@@ -192,9 +189,7 @@ def prove_translation_pair(
     ):
         return None
     if any(
-        not context.statically_known_equals(
-            producer_coefficient, consumer_coefficient
-        )
+        not context.statically_known_equals(producer_coefficient, consumer_coefficient)
         for producer_coefficient, consumer_coefficient in zip(
             producer_strides, consumer_strides
         )
@@ -237,9 +232,7 @@ def prove_translation_pair(
         (stride * offset for stride, offset in zip(producer_strides, translation)),
         sympy.S.Zero,
     )
-    if not context.statically_known_equals(
-        translated_offset, consumer.get_offset()
-    ):
+    if not context.statically_known_equals(translated_offset, consumer.get_offset()):
         return None
 
     return TranslationProof(
@@ -274,14 +267,11 @@ def prove_translation(
         return None
 
     raw_proofs = tuple(
-        prove_translation_pair(source, consumer_access, context)
-        for source in sources
+        prove_translation_pair(source, consumer_access, context) for source in sources
     )
     if any(proof is None for proof in raw_proofs):
         return None
-    proofs = typing.cast(
-        tuple[TranslationProof, ...], raw_proofs
-    )
+    proofs = typing.cast(tuple[TranslationProof, ...], raw_proofs)
     first = proofs[0]
     if any(
         proof.translation != first.translation
@@ -292,9 +282,7 @@ def prove_translation(
     return dataclasses.replace(
         first,
         matched_dependencies=tuple(
-            match
-            for proof in proofs
-            for match in proof.matched_dependencies
+            match for proof in proofs for match in proof.matched_dependencies
         ),
     )
 
@@ -1132,9 +1120,8 @@ class NestedReduction:
             *internal_relations,
             *output_relations,
         )
-        if (
-            allow_translation
-            and not cls.sub_parent_relations_are_replay_compatible(access_relations)
+        if allow_translation and not cls.sub_parent_relations_are_replay_compatible(
+            access_relations
         ):
             return plan_failure
         planned_source_names = OrderedSet(
@@ -1371,9 +1358,7 @@ class NestedReduction:
         if V.graph.sizevars.statically_known_equals(node_numel, 0):
             return None
         if allow_translation:
-            ratio = sympy.cancel(
-                sympy.sympify(full_numel) / sympy.sympify(node_numel)
-            )
+            ratio = sympy.cancel(sympy.sympify(full_numel) / sympy.sympify(node_numel))
             factor_expr, output_lanes_expr = sympy.fraction(ratio)
             if isinstance(factor_expr, (int, sympy.Integer)) and isinstance(
                 output_lanes_expr, (int, sympy.Integer)
@@ -1733,9 +1718,7 @@ class NestedReduction:
         base_offset = sizevars.simplify(base_offset)
         if not sizevars.statically_known_geq(base_offset, 0):
             return False
-        last_parent_r = sizevars.simplify(
-            base_offset + access_stride * (extent - 1)
-        )
+        last_parent_r = sizevars.simplify(base_offset + access_stride * (extent - 1))
         if not sizevars.statically_known_lt(last_parent_r, parent_rnumel):
             return False
 
@@ -1748,9 +1731,7 @@ class NestedReduction:
         # Triton geometry. Keep exact-width conversions after symbolic proof.
         parent_width_expr = sizevars.simplify(parent_rnumel)
         parent_width = int(parent_width_expr)
-        if not is_power_of_2(parent_width) or not is_power_of_2(
-            sub_parent_factor
-        ):
+        if not is_power_of_2(parent_width) or not is_power_of_2(sub_parent_factor):
             return False
         if parent_width % sub_parent_factor:
             return False
@@ -1950,9 +1931,7 @@ class NestedReduction:
                     1,
                     proof.translation[1],
                     dense_extent,
-                    V.graph.sizevars.simplify(
-                        sympy_subs(parent_rnumel, extent_subs)
-                    ),
+                    V.graph.sizevars.simplify(sympy_subs(parent_rnumel, extent_subs)),
                     sub_parent_factor,
                 ):
                     return None
@@ -2151,9 +2130,7 @@ class NestedReduction:
             output_rnumel = V.graph.sizevars.simplify(
                 sympy_product(output_access.size[-1:])
             )
-            if not V.graph.sizevars.statically_known_lt(
-                output_rnumel, parent_rnumel
-            ):
+            if not V.graph.sizevars.statically_known_lt(output_rnumel, parent_rnumel):
                 continue
             proof = cls.prove_sub_parent_translation(
                 (source,),
@@ -2231,7 +2208,9 @@ class NestedReduction:
             for node_index, node in enumerate(group.nodes):
                 for dep in node.read_writes.reads:
                     if read_group_indices is not None and isinstance(dep, MemoryDep):
-                        read_group_indices.setdefault(dep, OrderedSet()).add(group_index)
+                        read_group_indices.setdefault(dep, OrderedSet()).add(
+                            group_index
+                        )
                     if dep.name not in writes_by_name:
                         continue
                     if not isinstance(dep, MemoryDep):
@@ -2731,9 +2710,7 @@ class NestedReduction:
         Returns:
             True if all relations use compatible replay forms.
         """
-        has_dense_mapping = any(
-            relation.access_stride == 1 for relation in relations
-        )
+        has_dense_mapping = any(relation.access_stride == 1 for relation in relations)
         # Dense replay closes the parent body; live lane sources cannot cross it.
         if has_dense_mapping and any(
             relation.access_stride is not None
@@ -2760,14 +2737,12 @@ class NestedReduction:
             if not affine_relations:
                 continue
             strides = OrderedSet(
-                relation.access_stride
-                for relation in affine_relations
+                relation.access_stride for relation in affine_relations
             )
             if len(strides) != 1:
                 return False
             source_sets = OrderedSet(
-                frozenset(relation.source_accesses)
-                for relation in affine_relations
+                frozenset(relation.source_accesses) for relation in affine_relations
             )
             # ``requires_live_source`` is relation-specific: the same source
             # name may be forwarded for one output and remain an external or
@@ -3199,15 +3174,20 @@ class SubParentAccessRelation:
         if not self.source_accesses or len(names) != 1:
             raise AssertionError("sub-parent accesses must share one buffer name")
         has_affine_field = any(
-            field is not None for field in (self.access_stride, self.base_offset, self.extent)
+            field is not None
+            for field in (self.access_stride, self.base_offset, self.extent)
         )
         if has_affine_field and any(
-            field is None for field in (self.access_stride, self.base_offset, self.extent)
+            field is None
+            for field in (self.access_stride, self.base_offset, self.extent)
         ):
             raise AssertionError("sub-parent affine relation must be complete")
         if self.access_stride is not None and self.access_stride <= 0:
             raise ValueError("sub-parent affine access stride must be positive")
-        if self.base_offset is not None and sympy.sympify(self.base_offset).is_negative is True:
+        if (
+            self.base_offset is not None
+            and sympy.sympify(self.base_offset).is_negative is True
+        ):
             raise ValueError("sub-parent affine base offset must be nonnegative")
         if self.extent is not None and sympy.sympify(self.extent).is_positive is False:
             raise ValueError("sub-parent affine extent must be positive")
@@ -3219,7 +3199,7 @@ class SubParentAccessRelation:
         consumer_access: MemoryDep,
         *,
         sizevars: SizeVarAllocator,
-    ) -> "TranslationProof | None":
+    ) -> TranslationProof | None:
         """Prove a dense translation relation.
 
         Args:
@@ -3230,9 +3210,7 @@ class SubParentAccessRelation:
         Returns:
             The proof, or None if the relation is invalid.
         """
-        return prove_translation(
-            source_accesses, consumer_access, context=sizevars
-        )
+        return prove_translation(source_accesses, consumer_access, context=sizevars)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -11004,8 +10982,10 @@ class Scheduler:
             mapped_parent_rnumel = V.graph.sizevars.simplify(
                 sympy_subs(plan.parent_rnumel, extent_subs)
             )
-            if plan.allow_translation and plan.nested_stage is None and any(
-                relation.access_stride == 1 for relation in affine_relations
+            if (
+                plan.allow_translation
+                and plan.nested_stage is None
+                and any(relation.access_stride == 1 for relation in affine_relations)
             ):
                 read_group_indices: dict[MemoryDep, OrderedSet[int]] = {}
                 if (
@@ -11068,7 +11048,7 @@ class Scheduler:
                 if (
                     plan.allow_translation
                     and not NestedReduction._sub_parent_affine_relation_is_admissible(
-                        relation.access_stride,
+                        typing.cast(int, relation.access_stride),
                         typing.cast("sympy.Expr", relation.base_offset),
                         typing.cast("sympy.Expr", relation.extent),
                         mapped_parent_rnumel,

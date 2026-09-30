@@ -34,7 +34,6 @@ from torch._inductor.scheduler import (
     ExternKernelSchedulerNode,
     ForeachKernelSchedulerNode,
     FusedNestedReductions,
-    FusedStagedReduction,
     FusionMemoryState,
     MemoryDepMatch,
     NestedReduction,
@@ -154,12 +153,8 @@ class TestScheduler(TestCase):
         self.assertIsNotNone(shifted)
         self.assertEqual(zero.translation, (0, 0))
         self.assertEqual(shifted.translation, (0, 64))
-        self.assertEqual(
-            shifted.compatible_extents, ((4, 4), (192, 128))
-        )
-        self.assertEqual(
-            shifted.matched_dependencies[0].write, producer
-        )
+        self.assertEqual(shifted.compatible_extents, ((4, 4), (192, 128)))
+        self.assertEqual(shifted.matched_dependencies[0].write, producer)
         self.assertEqual(
             shifted.matched_dependencies[0].read,
             consumer(192 * row + feature + 64),
@@ -184,9 +179,7 @@ class TestScheduler(TestCase):
             consumer(192 * row - feature + 127),
             consumer(193 * row + feature + 64),
             # Data-dependent indexing is outside the affine proof.
-            consumer(
-                sympy.Symbol("indirect_index", integer=True) + feature
-            ),
+            consumer(sympy.Symbol("indirect_index", integer=True) + feature),
         )
         for invalid_consumer in rejected:
             with self.subTest(invalid_consumer=invalid_consumer):
@@ -265,9 +258,7 @@ class TestScheduler(TestCase):
             (4, consumer_extent),
         )
         epilogue = Mock(
-            read_writes=ReadWrites(
-                OrderedSet([consumer]), OrderedSet(), OrderedSet()
-            )
+            read_writes=ReadWrites(OrderedSet([consumer]), OrderedSet(), OrderedSet())
         )
         output_groups = (SubParentOutputGroup(3, (epilogue,)),)
         read_group_indices: dict[MemoryDep, OrderedSet[int]] = {}
@@ -1057,7 +1048,9 @@ class TestScheduler(TestCase):
             base_offset=1,
             extent=32,
         )
-        relations = (dense_relation, lane_relation) if include_dense else (lane_relation,)
+        relations = (
+            (dense_relation, lane_relation) if include_dense else (lane_relation,)
+        )
         self.assertEqual(
             NestedReduction.sub_parent_relations_are_replay_compatible(relations),
             expected,
@@ -1203,7 +1196,12 @@ class TestScheduler(TestCase):
 
     @parametrize(
         "live_source,replayed,selected",
-        ((True, True, True), (False, True, True), (True, False, True), (True, True, False)),
+        (
+            (True, True, True),
+            (False, True, True),
+            (True, False, True),
+            (True, True, False),
+        ),
     )
     def test_sub_parent_dense_materialization_uses_relation_values(
         self, live_source, replayed, selected
@@ -1273,12 +1271,8 @@ class TestScheduler(TestCase):
         row, feature = sympy.symbols(
             "dense_replay_row dense_replay_feature", integer=True, nonnegative=True
         )
-        source = MemoryDep(
-            "buf0", 16 * row + feature, (row, feature), (2, 16)
-        )
-        consumer = MemoryDep(
-            "buf0", 16 * row + feature, (row, feature), (2, 8)
-        )
+        source = MemoryDep("buf0", 16 * row + feature, (row, feature), (2, 16))
+        consumer = MemoryDep("buf0", 16 * row + feature, (row, feature), (2, 8))
         relation = SubParentAccessRelation(
             (source,),
             consumer,
@@ -1305,13 +1299,9 @@ class TestScheduler(TestCase):
             resolver._values = {"buf0": [Mock()]}
             resolver._materialize_dense_source = Mock(return_value=Mock())
             self.assertIsNotNone(
-                resolver.resolve_load(
-                    "buf0", consumer.index, replay_node=replay_node
-                )
+                resolver.resolve_load("buf0", consumer.index, replay_node=replay_node)
             )
-            with self.assertRaisesRegex(
-                AssertionError, "no dense sub-parent relation"
-            ):
+            with self.assertRaisesRegex(AssertionError, "no dense sub-parent relation"):
                 resolver.resolve_load(
                     "buf0", consumer.index + 1, replay_node=replay_node
                 )

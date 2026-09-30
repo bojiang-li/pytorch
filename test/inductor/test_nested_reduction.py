@@ -2882,7 +2882,9 @@ class TranslatedSubParentEpilogueTest(TestCase):
     )
     def test_dynamic_shapes(self, device, dynamic_feature_width, shapes):
         input_sets = tuple(
-            _make_mla_inputs(device=device, batch_size=batch, seq_len=seq, head_dim=width)
+            _make_mla_inputs(
+                device=device, batch_size=batch, seq_len=seq, head_dim=width
+            )
             for batch, seq, width in shapes
         )
         for input_index, tensor in enumerate(input_sets[0]):
@@ -2933,13 +2935,17 @@ class TranslatedSubParentEpilogueTest(TestCase):
             leading = selected[..., :32]
             return leading * cos[..., :32] + leading * sin[..., :32], selected[..., 32:]
 
-        inputs = _make_mla_inputs(device=device, batch_size=2, seq_len=8, head_dim=head_dim)
+        inputs = _make_mla_inputs(
+            device=device, batch_size=2, seq_len=8, head_dim=head_dim
+        )
         if kind == "indirect":
             inputs = (*inputs, torch.randperm(head_dim, device=device)[:96])
         self.compile_and_check(fn, (inputs,), expected=False, **options)
 
 
-instantiate_device_type_tests(TranslatedSubParentEpilogueTest, globals(), only_for="cuda")
+instantiate_device_type_tests(
+    TranslatedSubParentEpilogueTest, globals(), only_for="cuda"
+)
 
 
 TRITON_KERNEL_RE = re.compile(
