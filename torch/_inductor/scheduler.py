@@ -1283,11 +1283,7 @@ class NestedReduction:
                 continue
             if cls._pointwise_node_matches_domain(node, full_numel, (numel, rnumel)):
                 continue
-            rate = cls._sub_parent_epilogue_rate(
-                node_numel,
-                full_numel,
-                allow_translation=allow_translation,
-            )
+            rate = cls._sub_parent_epilogue_rate(node_numel, full_numel)
             if rate is not None:
                 node_factor, output_lanes = rate
                 expected_groups = (
@@ -1348,7 +1344,6 @@ class NestedReduction:
         cls,
         node_numel: sympy.Expr,
         full_numel: sympy.Expr,
-        allow_translation: bool = False,
     ) -> tuple[int, int] | None:
         """Infer ``(input factor, output lanes)`` from the output element count.
 
@@ -1357,23 +1352,6 @@ class NestedReduction:
         """
         if V.graph.sizevars.statically_known_equals(node_numel, 0):
             return None
-        if allow_translation:
-            ratio = sympy.cancel(sympy.sympify(full_numel) / sympy.sympify(node_numel))
-            factor_expr, output_lanes_expr = sympy.fraction(ratio)
-            if isinstance(factor_expr, (int, sympy.Integer)) and isinstance(
-                output_lanes_expr, (int, sympy.Integer)
-            ):
-                factor = int(factor_expr)
-                output_lanes = int(output_lanes_expr)
-                if (
-                    is_power_of_2(factor)
-                    and 1 <= output_lanes < factor
-                    and V.graph.sizevars.statically_known_equals(
-                        factor * node_numel, output_lanes * full_numel
-                    )
-                ):
-                    return factor, output_lanes
-
         # TODO: Generalize once other rates have end-to-end legality and codegen coverage.
         for rate in cls.SUB_PARENT_RATES:
             factor, output_lanes = rate
@@ -1730,6 +1708,13 @@ class NestedReduction:
         # Dense projection is currently emitted only for the existing CUDA /
         # Triton geometry. Keep exact-width conversions after symbolic proof.
         parent_width_expr = sizevars.simplify(parent_rnumel)
+        extent_expr = sizevars.simplify(extent)
+        base_offset_expr = sizevars.simplify(base_offset)
+        if not all(
+            isinstance(expr, sympy.Integer)
+            for expr in (parent_width_expr, extent_expr, base_offset_expr)
+        ):
+            return False
         parent_width = int(parent_width_expr)
         if not is_power_of_2(parent_width) or not is_power_of_2(sub_parent_factor):
             return False
@@ -1739,8 +1724,6 @@ class NestedReduction:
         if not is_power_of_2(child_lane_width):
             return False
 
-        extent_expr = sizevars.simplify(extent)
-        base_offset_expr = sizevars.simplify(base_offset)
         extent = int(extent_expr)
         offset = int(base_offset_expr)
         return (
@@ -2117,7 +2100,9 @@ class NestedReduction:
 
         relations: list[SubParentAccessRelation] = []
         for output in V.graph.graph_outputs:
-            name = output.get_name()
+            name = output.maybe_get_name()
+            if name is None:
+                continue
             writes = writes_by_name.get(name, ())
             if not writes:
                 continue

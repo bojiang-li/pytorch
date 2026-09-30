@@ -1589,6 +1589,57 @@ class TestScheduler(TestCase):
                 )
             )
 
+    @parametrize("polyhedral_fusion", [False, True])
+    @parametrize("rate", [(2, 1), (4, 1), (4, 3), (8, 1), (8, 3), (16, 15), (64, 63)])
+    def test_sub_parent_epilogue_rate_allow_list(self, polyhedral_fusion, rate):
+        factor, lanes = rate
+        graph = Mock(sizevars=SizeVarAllocator())
+        with (
+            V.set_graph_handler(graph),
+            inductor_config.patch(polyhedral_fusion=polyhedral_fusion),
+        ):
+            node_numel, full_numel = 128 * lanes, 128 * factor
+            actual = NestedReduction._sub_parent_epilogue_rate(node_numel, full_numel)
+        expected = rate if rate in ((2, 1), (4, 1), (4, 3)) else None
+        self.assertEqual(actual, expected)
+
+    @parametrize("symbolic_field", ["parent_width", "extent", "offset", "none"])
+    def test_sub_parent_dense_admission_concrete_geometry(self, symbolic_field):
+        s0 = sympy.Symbol("s0", integer=True, positive=True)
+        width, extent, offset = sympy.Integer(256), sympy.Integer(64), sympy.Integer(0)
+        if symbolic_field == "parent_width":
+            width, extent = 2 * s0, s0
+        elif symbolic_field == "extent":
+            extent = s0
+        elif symbolic_field == "offset":
+            offset = s0
+        graph = Mock(sizevars=SizeVarAllocator())
+        with V.set_graph_handler(graph):
+            if symbolic_field == "parent_width":
+                rate = NestedReduction._sub_parent_epilogue_rate(s0, width)
+                subs = NestedReduction.try_get_sub_parent_extent_subs(width, 2)
+                self.assertEqual(rate, (2, 1))
+                self.assertEqual(subs, {})
+            actual = NestedReduction._sub_parent_affine_relation_is_admissible(
+                1, offset, extent, width, 2 if symbolic_field == "parent_width" else 4
+            )
+        self.assertEqual(actual, symbolic_field == "none")
+
+    @parametrize("output_kind", ["none", "shape"])
+    def test_sub_parent_output_relations_skip_unnamed_outputs(self, output_kind):
+        s0 = sympy.Symbol("s0", integer=True, positive=True)
+        output = (
+            ir.NoneAsConstantBuffer()
+            if output_kind == "none"
+            else ir.ShapeAsConstantBuffer(expr=s0)
+        )
+        graph = Mock(sizevars=SizeVarAllocator(), graph_outputs=[output])
+        with V.set_graph_handler(graph):
+            relations = NestedReduction.sub_parent_output_access_relations(
+                (), sympy.Integer(1), sympy.Integer(256), {}, 4
+            )
+        self.assertEqual(relations, ())
+
     def test_sub_parent_broadcast_access_relation_frame_contract(self):
         s0, s1 = sympy.symbols("s0 s1", integer=True, nonnegative=True)
         d0, d1, d2 = sympy.symbols("d0 d1 d2", integer=True, nonnegative=True)
@@ -2039,12 +2090,7 @@ class TestScheduler(TestCase):
                 )
                 sub_parent.group = (None, (36, 1))
                 sub_parent.get_ranges.return_value = ([3, 6, 2], [])
-                self.assertEqual(
-                    NestedReduction._sub_parent_epilogue_rate(
-                        36, 288, allow_translation=True
-                    ),
-                    (8, 1),
-                )
+                self.assertIsNone(NestedReduction._sub_parent_epilogue_rate(36, 288))
                 new_nested_rate = NestedReduction._nested_sub_parent_rate(
                     sub_parent, context
                 )
