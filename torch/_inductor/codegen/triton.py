@@ -6871,7 +6871,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         reshape_shape: Sequence[sympy.Expr | int | str],
         part_names: Sequence[str],
     ) -> None:
-        """Split contiguous trailing intervals without changing the split helper."""
+        """Reshape and split the trailing dimension into contiguous equal intervals."""
         dtype = value.dtype
         if dtype is None:
             raise AssertionError("split value must have a known dtype")

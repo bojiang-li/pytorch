@@ -276,8 +276,8 @@ class TestScheduler(TestCase):
             )
             self.assertEqual(read_group_indices[consumer], OrderedSet([0]))
             relation = SubParentAccessRelation(
-                (source,),
-                consumer,
+                source_accesses=(source,),
+                consumer_access=consumer,
                 requires_live_source=False,
                 access_stride=1,
                 base_offset=64,
@@ -956,26 +956,31 @@ class TestScheduler(TestCase):
     def test_sub_parent_resolver_rejects_inconsistent_name_contract(self):
         d0 = sympy.Symbol("d0", integer=True)
         access = MemoryDep("buf0", d0, (d0,), (sympy.Integer(16),))
-        direct = SubParentAccessRelation((access,), access, None, False)
+        direct = SubParentAccessRelation(
+            source_accesses=(access,),
+            consumer_access=access,
+            access_stride=None,
+            requires_live_source=False,
+        )
         lane = SubParentAccessRelation(
-            (access,),
-            access,
+            source_accesses=(access,),
+            consumer_access=access,
             access_stride=2,
             requires_live_source=False,
             base_offset=0,
             extent=8,
         )
         other_lane = SubParentAccessRelation(
-            (access,),
-            access,
+            source_accesses=(access,),
+            consumer_access=access,
             access_stride=2,
             requires_live_source=False,
             base_offset=1,
             extent=8,
         )
         required = SubParentAccessRelation(
-            (access,),
-            access,
+            source_accesses=(access,),
+            consumer_access=access,
             access_stride=2,
             requires_live_source=True,
             base_offset=0,
@@ -983,8 +988,8 @@ class TestScheduler(TestCase):
         )
         other_source = MemoryDep("buf0", d0 + 1, (d0,), (sympy.Integer(16),))
         other = SubParentAccessRelation(
-            (other_source,),
-            access,
+            source_accesses=(other_source,),
+            consumer_access=access,
             access_stride=2,
             requires_live_source=False,
             base_offset=0,
@@ -1033,16 +1038,16 @@ class TestScheduler(TestCase):
             "lane_source", 128 * row + 4 * feature + 1, (row, feature), (4, 32)
         )
         dense_relation = SubParentAccessRelation(
-            (dense_source,),
-            dense_read,
+            source_accesses=(dense_source,),
+            consumer_access=dense_read,
             access_stride=1,
             requires_live_source=False,
             base_offset=0,
             extent=32,
         )
         lane_relation = SubParentAccessRelation(
-            (lane_source,),
-            lane_read,
+            source_accesses=(lane_source,),
+            consumer_access=lane_read,
             access_stride=4,
             requires_live_source=live_source,
             base_offset=1,
@@ -1056,17 +1061,42 @@ class TestScheduler(TestCase):
             expected,
         )
 
+    @parametrize("access_stride", [None, 1, 4])
+    def test_sub_parent_replay_rejects_mixed_source_roles(self, access_stride):
+        row, feature = sympy.symbols("row feature", integer=True, nonnegative=True)
+        source = MemoryDep("buf0", 128 * row + feature, (row, feature), (4, 128))
+        read = MemoryDep("buf0", 128 * row + feature, (row, feature), (4, 32))
+        relation = SubParentAccessRelation(
+            source_accesses=(source,),
+            consumer_access=read,
+            requires_live_source=False,
+            access_stride=access_stride,
+            base_offset=0 if access_stride is not None else None,
+            extent=32 if access_stride is not None else None,
+        )
+        relations = (relation, dataclasses.replace(relation, requires_live_source=True))
+        with V.set_graph_handler(Mock(sizevars=SizeVarAllocator())):
+            self.assertFalse(
+                NestedReduction.sub_parent_relations_are_replay_compatible(relations)
+            )
+            with self.assertRaisesRegex(AssertionError, "mixed source roles"):
+                self._make_sub_parent_value_resolver(
+                    relations, factor=4, parent_numel=4, parent_rnumel=128
+                )
+
     def test_sub_parent_resolver_uses_planned_lane_set(self):
         d0 = sympy.Symbol("d0", integer=True, nonnegative=True)
         source = MemoryDep("buf0", d0, (d0,), (sympy.Integer(16),))
         relations = tuple(
             SubParentAccessRelation(
-                (source,),
-                MemoryDep("buf0", 4 * d0 + lane, (d0,), (sympy.Integer(4),)),
-                4,
-                True,
-                lane,
-                4,
+                source_accesses=(source,),
+                consumer_access=MemoryDep(
+                    "buf0", 4 * d0 + lane, (d0,), (sympy.Integer(4),)
+                ),
+                access_stride=4,
+                requires_live_source=True,
+                base_offset=lane,
+                extent=4,
             )
             for lane in (0, 2)
         )
@@ -1106,8 +1136,18 @@ class TestScheduler(TestCase):
         external = MemoryDep("external", d0, (d0,), (sympy.Integer(16),))
         internal = MemoryDep("internal", d0, (d0,), (sympy.Integer(16),))
         relations = (
-            SubParentAccessRelation((external,), external, None, False),
-            SubParentAccessRelation((internal,), internal, None, True),
+            SubParentAccessRelation(
+                source_accesses=(external,),
+                consumer_access=external,
+                access_stride=None,
+                requires_live_source=False,
+            ),
+            SubParentAccessRelation(
+                source_accesses=(internal,),
+                consumer_access=internal,
+                access_stride=None,
+                requires_live_source=True,
+            ),
         )
         kernel = Mock(_load_mask=None, _load_other=None)
         resolver = self._make_sub_parent_value_resolver(
@@ -1150,7 +1190,12 @@ class TestScheduler(TestCase):
     def test_sub_parent_required_source_must_remain_live(self):
         d0 = sympy.Symbol("d0", integer=True)
         access = MemoryDep("buf0", d0, (d0,), (sympy.Integer(16),))
-        relation = SubParentAccessRelation((access,), access, None, True)
+        relation = SubParentAccessRelation(
+            source_accesses=(access,),
+            consumer_access=access,
+            access_stride=None,
+            requires_live_source=True,
+        )
         kernel = Mock(_load_mask=None, _load_other=None)
         kernel.cse.contains_value.return_value = False
         resolver = self._make_sub_parent_value_resolver(
@@ -1172,8 +1217,10 @@ class TestScheduler(TestCase):
         source = MemoryDep("buf0", index, (index,), (sympy.Integer(16),))
         relations = tuple(
             SubParentAccessRelation(
-                (source,),
-                MemoryDep("buf0", 2 * index + lane, (index,), (sympy.Integer(8),)),
+                source_accesses=(source,),
+                consumer_access=MemoryDep(
+                    "buf0", 2 * index + lane, (index,), (sympy.Integer(8),)
+                ),
                 access_stride=2,
                 requires_live_source=live_source,
                 base_offset=lane,
@@ -1210,8 +1257,8 @@ class TestScheduler(TestCase):
         source = MemoryDep("buf0", 16 * row + feature, (row, feature), (2, 16))
         consumer = MemoryDep("buf0", 16 * row + feature, (row, feature), (2, 8))
         relation = SubParentAccessRelation(
-            (source,),
-            consumer,
+            source_accesses=(source,),
+            consumer_access=consumer,
             access_stride=1,
             requires_live_source=live_source,
             base_offset=0,
@@ -1246,7 +1293,12 @@ class TestScheduler(TestCase):
         graph_handler = Mock(sizevars=SizeVarAllocator())
         with V.set_graph_handler(graph_handler):
             access = MemoryDep("buf0", d0, (d0,), (sympy.Integer(16),)).normalize()
-        relation = SubParentAccessRelation((access,), access, None, False)
+        relation = SubParentAccessRelation(
+            source_accesses=(access,),
+            consumer_access=access,
+            access_stride=None,
+            requires_live_source=False,
+        )
         value = Mock()
         resolver = self._make_sub_parent_value_resolver(
             (relation,),
@@ -1274,8 +1326,8 @@ class TestScheduler(TestCase):
         source = MemoryDep("buf0", 16 * row + feature, (row, feature), (2, 16))
         consumer = MemoryDep("buf0", 16 * row + feature, (row, feature), (2, 8))
         relation = SubParentAccessRelation(
-            (source,),
-            consumer,
+            source_accesses=(source,),
+            consumer_access=consumer,
             requires_live_source=True,
             access_stride=1,
             base_offset=0,
@@ -1851,7 +1903,12 @@ class TestScheduler(TestCase):
         consumer = Mock()
         consumer.read_writes.reads = OrderedSet([read])
         consumer.unmet_dependencies = OrderedSet([read])
-        relation = SubParentAccessRelation((planned_write,), planned_read, None, True)
+        relation = SubParentAccessRelation(
+            source_accesses=(planned_write,),
+            consumer_access=planned_read,
+            access_stride=None,
+            requires_live_source=True,
+        )
         plan = Mock(
             nested_stage=None,
             sub_parent_stages=(
@@ -2166,7 +2223,9 @@ class TestScheduler(TestCase):
                 (writer, NestedReduction.PointwiseDomain.LOCAL_REDUCTION_INPUT)
             )
         source = next(iter(writer.read_writes.writes))
-        relation = SubParentAccessRelation((source,), source, requires_live_source=True)
+        relation = SubParentAccessRelation(
+            source_accesses=(source,), consumer_access=source, requires_live_source=True
+        )
         grouping = Mock(output_groups=(Mock(output_lanes=1, nodes=(epilogue,)),))
         grouping.factor = 2
         graph = Mock(sizevars=SizeVarAllocator())

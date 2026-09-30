@@ -2721,9 +2721,9 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
             )
             if len(source_sets) != 1:
                 raise AssertionError(f"mixed source accesses for {name}")
+            if len(source_roles) != 1:
+                raise AssertionError(f"mixed source roles for {name}")
             if mapping_kind != "dense":
-                if len(source_roles) != 1:
-                    raise AssertionError(f"mixed source roles for {name}")
                 if None in parent_lanes and len(parent_lanes) != 1:
                     raise AssertionError(f"mixed direct and lane relations for {name}")
             allowed_lanes = (
@@ -2732,9 +2732,7 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
                 else cast("frozenset[int]", frozenset(parent_lanes))
             )
             self._contracts[name] = _SubParentSourceContract(
-                source_is_internal=any(
-                    relation.requires_live_source for relation in relations
-                ),
+                source_is_internal=next(iter(source_roles)),
                 parent_lanes=allowed_lanes,
             )
         self._values: dict[str, OrderedSet[CSEVariable]] = {}

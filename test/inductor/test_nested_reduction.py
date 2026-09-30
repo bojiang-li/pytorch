@@ -2761,7 +2761,10 @@ class TranslatedSubParentEpilogueTest(TestCase):
             self.assertEqual(stage.output_groups[0].output_lanes, 1)
             mappings = {
                 (relation.access_stride, relation.base_offset, relation.extent)
-                for relation in stage.access_relations
+                for relation in (
+                    *stage.access_relations,
+                    *stage.output_access_relations,
+                )
                 if relation.access_stride is not None
             }
             self.assertEqual(mappings, {(1, 0, 64), (1, 64, 192)})
@@ -2829,6 +2832,60 @@ class TranslatedSubParentEpilogueTest(TestCase):
             fn, (inputs,), translated=False, force_persistent=force_persistent
         )
         self.assertEqual(kernels, 1)
+
+    @parametrize("offset", [0, 64])
+    def test_output_view_matching_epilogue_read(self, device, offset):
+        def fn(x):
+            y = x + x.sum(-1, keepdim=True)
+            view = y[:, offset : offset + 64]
+            return view, view * 2, y
+
+        def capture(nodes):
+            staged = [node for node in nodes if type(node) is FusedStagedReduction]
+            self.assertEqual(len(staged), 1)
+            node = staged[0]
+            _, (numel, rnumel) = node.group
+            plan = NestedReduction.sub_parent_epilogue_plan(
+                node.get_nodes(), numel, rnumel
+            )
+            self.assertIsNotNone(plan)
+            stage = plan.sub_parent_stages[0]
+            self.assertEqual(len(stage.output_access_relations), 1)
+            output_relation = stage.output_access_relations[0]
+            self.assertEqual(output_relation.base_offset, offset)
+            self.assertEqual(output_relation.extent, 64)
+            reads = [r for r in stage.access_relations if r.access_stride == 1]
+            self.assertEqual(len(reads), 1)
+            self.assertTrue(reads[0].requires_live_source)
+            return nodes
+
+        torch._dynamo.reset()
+        metrics.reset()
+        inputs = torch.randn(8, 256, device=device)
+        with (
+            inductor_config.patch(
+                {
+                    "polyhedral_fusion": True,
+                    "triton.nested_reduction": True,
+                    "fx_graph_cache": False,
+                    "_post_fusion_custom_pass": capture,
+                }
+            ),
+            fresh_inductor_cache(),
+            _choices_context(True),
+        ):
+            actual = torch.compile(fn, fullgraph=True)(inputs)
+        self.assert_outputs(actual, fn(inputs))
+        self.assertEqual(
+            actual[0].stride(), actual[2][:, offset : offset + 64].stride()
+        )
+        self.assertEqual(
+            actual[0].untyped_storage().data_ptr(),
+            actual[2].untyped_storage().data_ptr(),
+        )
+        actual[0].add_(1)
+        self.assertEqual(actual[0], actual[2][:, offset : offset + 64])
+        self.assertEqual(metrics.generated_kernel_count, 1)
 
     @parametrize(
         "shape_name,batch_size,seq_len,reorder,memory_planning",

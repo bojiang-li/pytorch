@@ -962,22 +962,22 @@ class NestedReduction:
         """
         strategies = (False, True) if config.polyhedral_fusion else (False,)
         for allow_translation in strategies:
-            result = cls.sub_parent_epilogue_result(
+            plan = cls._sub_parent_epilogue_plan(
                 nodes, numel, rnumel, allow_translation=allow_translation
             )
-            if result.plan is not None:
-                return result.plan
+            if plan is not None:
+                return plan
         return None
 
     @classmethod
-    def sub_parent_epilogue_result(
+    def _sub_parent_epilogue_plan(
         cls,
         nodes: Sequence[BaseSchedulerNode],
         numel: sympy.Expr,
         rnumel: sympy.Expr,
         allow_translation: bool = False,
-    ) -> SubParentFusionResult:
-        """Classify and plan a sub-parent candidate for one admission strategy.
+    ) -> StagedReductionPlan | None:
+        """Plan a sub-parent candidate for one admission strategy.
 
         Args:
             nodes: Candidate scheduler nodes.
@@ -986,43 +986,29 @@ class NestedReduction:
             allow_translation: Include dense identity-translation candidates.
 
         Returns:
-            The candidate classification and any valid plan.
+            A valid plan, or None when the candidate cannot be emitted.
         """
         if not all(isinstance(node, SchedulerNode) for node in nodes):
-            return SubParentFusionResult(False, None)
+            return None
         scheduler_nodes = typing.cast("Sequence[SchedulerNode]", nodes)
         parent_rnumel = V.graph.sizevars.simplify(rnumel)
         if not cls._mutations_survive_hoisting(nodes):
-            grouping = cls._sub_parent_epilogue_candidate_nodes(
-                scheduler_nodes,
-                numel,
-                rnumel,
-                allow_translation=allow_translation,
-            )
-            return SubParentFusionResult(
-                grouping is not None,
-                None,
-                reason="mutation prevents safe stage hoisting" if grouping else None,
-            )
+            return None
 
         # TODO: Consider an alternative to rediscovering the reduction here.
         reduction_nodes = tuple(node for node in scheduler_nodes if node.is_reduction())
         if not reduction_nodes:
-            return SubParentFusionResult(False, None)
-        planning_rnumel = parent_rnumel if allow_translation else rnumel
+            return None
 
         grouping = cls._sub_parent_epilogue_candidate_nodes(
             scheduler_nodes,
             numel,
-            planning_rnumel,
+            parent_rnumel,
             allow_translation=allow_translation,
         )
         if grouping is None:
-            return SubParentFusionResult(False, None)
+            return None
 
-        plan_failure = SubParentFusionResult(
-            True, None, reason="sub-parent epilogue planning failed"
-        )
         parent_source_names = cls._dependency_names(reduction_nodes, dep_type=MemoryDep)
         output_groups = grouping.output_groups
         sub_parent_factor = grouping.factor
@@ -1042,7 +1028,7 @@ class NestedReduction:
             )
             & epilogue_read_names
         )
-        full_numel = V.graph.sizevars.simplify(numel * planning_rnumel)
+        full_numel = V.graph.sizevars.simplify(numel * parent_rnumel)
         parent_write_names = OrderedSet(
             dep.name
             for node in parent_nodes
@@ -1065,14 +1051,14 @@ class NestedReduction:
             read_group_indices=read_group_indices,
         )
         if internal_relations is None:
-            return plan_failure
+            return None
         known_extent_subs: dict[sympy.Expr, sympy.Expr] = {}
         if allow_translation:
             rate_extent_subs = cls.try_get_sub_parent_extent_subs(
                 parent_rnumel, sub_parent_factor
             )
             if rate_extent_subs is None:
-                return plan_failure
+                return None
             known_extent_subs.update(rate_extent_subs)
         source_relations = cls._try_get_sub_parent_access_relations(
             parent_nodes,
@@ -1085,7 +1071,7 @@ class NestedReduction:
             allow_translation=allow_translation,
         )
         if source_relations is None:
-            return plan_failure
+            return None
         if allow_translation and not cls._sub_parent_dense_relations_are_admitted(
             source_relations,
             output_groups,
@@ -1093,7 +1079,7 @@ class NestedReduction:
             V.graph.sizevars.simplify(sympy_subs(parent_rnumel, known_extent_subs)),
             sub_parent_factor,
         ):
-            return plan_failure
+            return None
         output_relations = ()
         if allow_translation:
             output_relations = cls.sub_parent_output_access_relations(
@@ -1104,61 +1090,57 @@ class NestedReduction:
                 sub_parent_factor,
             )
             if output_relations is None:
-                return plan_failure
-        if not (source_relations or output_relations):
-            return plan_failure
+                return None
+        if not source_relations:
+            return None
         broadcast_relations = cls._sub_parent_broadcast_access_relations(
             parent_nodes,
             epilogue_nodes,
             broadcast_source_names,
         )
         if broadcast_relations is None:
-            return plan_failure
+            return None
         access_relations = (
             *source_relations,
             *broadcast_relations,
             *internal_relations,
-            *output_relations,
         )
         if allow_translation and not cls.sub_parent_relations_are_replay_compatible(
             access_relations
         ):
-            return plan_failure
+            return None
         planned_source_names = OrderedSet(
-            relation.source_accesses[0].name
-            for relation in (*source_relations, *output_relations)
+            relation.source_accesses[0].name for relation in source_relations
         )
         ordered_parent_nodes = cls._order_sub_parent_parent_nodes(
             parent_nodes,
             planned_source_names & parent_write_names,
             numel,
-            planning_rnumel,
+            parent_rnumel,
         )
         if ordered_parent_nodes is None:
-            return plan_failure
+            return None
         if not cls._sub_parent_epilogue_outputs_unread(
             scheduler_nodes, epilogue_node_set
         ):
-            return plan_failure
-        return SubParentFusionResult(
-            True,
-            StagedReductionPlan(
-                parent_nodes=ordered_parent_nodes.nodes,
-                parent_numel=numel,
-                parent_rnumel=parent_rnumel,
-                nested_stage=None,
-                sub_parent_stages=(
-                    SubParentEpilogueStage(
-                        factor=sub_parent_factor,
-                        access_relations=access_relations,
-                        output_groups=output_groups,
-                    ),
+            return None
+        return StagedReductionPlan(
+            parent_nodes=ordered_parent_nodes.nodes,
+            parent_numel=numel,
+            parent_rnumel=parent_rnumel,
+            nested_stage=None,
+            sub_parent_stages=(
+                SubParentEpilogueStage(
+                    factor=sub_parent_factor,
+                    access_relations=access_relations,
+                    output_groups=output_groups,
+                    output_access_relations=output_relations,
                 ),
-                required_post_reduction_index=(
-                    ordered_parent_nodes.required_post_reduction_index
-                ),
-                allow_translation=allow_translation,
             ),
+            required_post_reduction_index=(
+                ordered_parent_nodes.required_post_reduction_index
+            ),
+            allow_translation=allow_translation,
         )
 
     @staticmethod
@@ -2712,6 +2694,14 @@ class NestedReduction:
             relations_by_name[relation.consumer_access.name].append(relation)
 
         for name_relations in relations_by_name.values():
+            source_roles = OrderedSet(
+                relation.requires_live_source for relation in name_relations
+            )
+            source_sets = OrderedSet(
+                frozenset(relation.source_accesses) for relation in name_relations
+            )
+            if len(source_roles) != 1 or len(source_sets) != 1:
+                return False
             affine_relations = [
                 relation
                 for relation in name_relations
@@ -2725,16 +2715,6 @@ class NestedReduction:
                 relation.access_stride for relation in affine_relations
             )
             if len(strides) != 1:
-                return False
-            source_sets = OrderedSet(
-                frozenset(relation.source_accesses) for relation in affine_relations
-            )
-            # ``requires_live_source`` is relation-specific: the same source
-            # name may be forwarded for one output and remain an external or
-            # graph-output access for another.  The codegen descriptor retains
-            # that distinction, so differing roles are not a reason to reject
-            # an otherwise compatible affine group.
-            if len(source_sets) != 1:
                 return False
         return True
 
@@ -3128,7 +3108,7 @@ class NestedReductionStage:
     pointwise_domains: tuple[tuple[SchedulerNode, NestedReduction.PointwiseDomain], ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class SubParentAccessRelation:
     """A source-to-consumer relation used for sub-parent register forwarding.
 
@@ -3148,7 +3128,7 @@ class SubParentAccessRelation:
     source_accesses: tuple[MemoryDep, ...]
     consumer_access: MemoryDep
     access_stride: int | None = None
-    requires_live_source: bool = False
+    requires_live_source: bool
     base_offset: sympy.Expr | None = None
     extent: sympy.Expr | None = None
 
@@ -3238,6 +3218,8 @@ class SubParentEpilogueStage:
     factor: int
     access_relations: tuple[SubParentAccessRelation, ...]
     output_groups: tuple[SubParentOutputGroup, ...]
+    # Output-view proofs validate materialized views, not register forwarding.
+    output_access_relations: tuple[SubParentAccessRelation, ...] = ()
 
     @property
     def epilogue_nodes(self) -> tuple[SchedulerNode, ...]:
@@ -3262,20 +3244,6 @@ class OrderedParentNodes:
 
     nodes: tuple[SchedulerNode, ...]
     required_post_reduction_index: int | None
-
-
-@dataclasses.dataclass(frozen=True)
-class SubParentFusionResult:
-    """Reusable semantic result for one sub-parent fusion consideration."""
-
-    is_candidate: bool
-    plan: StagedReductionPlan | None
-    reason: str | None = None
-
-    def __post_init__(self) -> None:
-        """Validate candidate and plan consistency."""
-        if self.plan is not None and not self.is_candidate:
-            raise AssertionError("a sub-parent plan must belong to a candidate")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -11004,7 +10972,7 @@ class Scheduler:
                     ),
                 )
             )
-            for relation in affine_relations:
+            for relation in (*affine_relations, *stage.output_access_relations):
                 consumer_frame = child_frame
                 if (
                     plan.allow_translation
