@@ -2543,31 +2543,6 @@ class _PointwiseRemapHandler(WrapperHandler):  # type: ignore[type-arg]
 class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
     """Use exhaustive access proofs as a per-name sub-parent replay contract."""
 
-    @staticmethod
-    def _accesses_match_in_child_frame(
-        left: MemoryDep,
-        right: MemoryDep,
-        parent_numel: sympy.Expr,
-        child_extent: sympy.Expr,
-    ) -> bool:
-        """Compare accesses after collapsing them into the proved X/R frame."""
-        if left.name != right.name or left.mode != right.mode:
-            return False
-        frame = (
-            sympy_index_symbol("_sub_parent_replay_x"),
-            sympy_index_symbol("_sub_parent_replay_r"),
-        )
-        sizes = (parent_numel, child_extent)
-        left_frame = left.normalize_with_ranges(frame, sizes)
-        right_frame = right.normalize_with_ranges(frame, sizes)
-        return (
-            left_frame is not None
-            and right_frame is not None
-            and V.graph.sizevars.statically_known_equals(
-                left_frame.index, right_frame.index
-            )
-        )
-
     def __init__(
         self,
         inner,
@@ -2650,37 +2625,31 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
             )
             if not V.graph.sizevars.statically_known_equals(child_feature, extent):
                 raise AssertionError("affine extent does not match the consumer frame")
-            replay_matches = [
-                (group_index, node)
-                for group_index, group in enumerate(output_groups)
-                for node in group.nodes
-                if any(
+            group_index = relation.output_group
+            if group_index is None:
+                raise AssertionError(
+                    "dense affine relation is missing output ownership"
+                )
+            if not 0 <= group_index < len(output_groups):
+                raise AssertionError("dense affine relation has invalid output group")
+            group = output_groups[group_index]
+            if not relation.consumer_nodes or any(
+                node not in group.nodes
+                or not any(
                     isinstance(read, MemoryDep)
-                    and self._accesses_match_in_child_frame(
-                        relation.consumer_access,
-                        read,
-                        parent_numel,
-                        extent,
-                    )
+                    and relation.matches_consumer_access(read, parent_numel)
                     for read in node.read_writes.reads
                 )
-            ]
-            if len(OrderedSet(group_index for group_index, _ in replay_matches)) > 1:
+                for node in relation.consumer_nodes
+            ):
                 raise AssertionError(
-                    "dense affine relation belongs to multiple output groups"
+                    "dense affine relation lost its consumer ownership"
                 )
-            if not replay_matches:
-                replay_matches = [(None, None)]
-            for group_index, replay_node in replay_matches:
-                output_lanes = (
-                    output_groups[group_index].output_lanes
-                    if group_index is not None
-                    else 1
-                )
+            for replay_node in relation.consumer_nodes:
                 descriptor = _SubParentRelationDescriptor(
                     relation=relation,
                     output_group=group_index,
-                    output_lanes=output_lanes,
+                    output_lanes=group.output_lanes,
                     replay_node=replay_node,
                     parent_shape=(parent_numel, parent_rnumel),
                     child_shape=(parent_numel, extent),
@@ -2952,11 +2921,8 @@ class _SubParentValueResolver(WrapperHandler):  # type: ignore[type-arg]
                 (descriptor_index, descriptor)
                 for descriptor_index, descriptor in candidates
                 if any(
-                    self._accesses_match_in_child_frame(
-                        descriptor.relation.consumer_access,
-                        read,
-                        descriptor.parent_shape[0],
-                        descriptor.child_shape[1],
+                    descriptor.relation.matches_consumer_access(
+                        read, descriptor.parent_shape[0]
                     )
                     and V.graph.sizevars.statically_known_equals(replay_index, index)
                     for read, replay_index in replay_accesses

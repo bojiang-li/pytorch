@@ -261,7 +261,6 @@ class TestScheduler(TestCase):
             read_writes=ReadWrites(OrderedSet([consumer]), OrderedSet(), OrderedSet())
         )
         output_groups = (SubParentOutputGroup(3, (epilogue,)),)
-        read_group_indices: dict[MemoryDep, OrderedSet[int]] = {}
 
         with (
             V.set_graph_handler(Mock(sizevars=SizeVarAllocator())),
@@ -270,11 +269,9 @@ class TestScheduler(TestCase):
             self.assertEqual(
                 NestedReduction._sub_parent_internal_access_relations(
                     output_groups,
-                    read_group_indices=read_group_indices,
                 ),
                 (),
             )
-            self.assertEqual(read_group_indices[consumer], OrderedSet([0]))
             relation = SubParentAccessRelation(
                 source_accesses=(source,),
                 consumer_access=consumer,
@@ -282,12 +279,14 @@ class TestScheduler(TestCase):
                 access_stride=1,
                 base_offset=64,
                 extent=consumer_extent,
+                output_group=0,
+                consumer_nodes=(epilogue,),
             )
             self.assertEqual(
                 NestedReduction._sub_parent_dense_relations_are_admitted(
                     (relation,),
                     output_groups,
-                    read_group_indices,
+                    4,
                     256,
                     4,
                 ),
@@ -1074,6 +1073,15 @@ class TestScheduler(TestCase):
             base_offset=0 if access_stride is not None else None,
             extent=32 if access_stride is not None else None,
         )
+        groups = ()
+        if access_stride == 1:
+            node = Mock(
+                read_writes=ReadWrites(OrderedSet([read]), OrderedSet(), OrderedSet())
+            )
+            groups = (SubParentOutputGroup(1, (node,)),)
+            relation = dataclasses.replace(
+                relation, output_group=0, consumer_nodes=(node,)
+            )
         relations = (relation, dataclasses.replace(relation, requires_live_source=True))
         with V.set_graph_handler(Mock(sizevars=SizeVarAllocator())):
             self.assertFalse(
@@ -1081,7 +1089,11 @@ class TestScheduler(TestCase):
             )
             with self.assertRaisesRegex(AssertionError, "mixed source roles"):
                 self._make_sub_parent_value_resolver(
-                    relations, factor=4, parent_numel=4, parent_rnumel=128
+                    relations,
+                    factor=4,
+                    parent_numel=4,
+                    parent_rnumel=128,
+                    output_groups=groups,
                 )
 
     def test_sub_parent_resolver_uses_planned_lane_set(self):
@@ -1268,7 +1280,20 @@ class TestScheduler(TestCase):
             read_writes=ReadWrites(OrderedSet([consumer]), OrderedSet(), OrderedSet())
         )
         groups = (SubParentOutputGroup(1, (node,)),) if replayed else ()
+        if replayed:
+            relation = dataclasses.replace(
+                relation, output_group=0, consumer_nodes=(node,)
+            )
         with V.set_graph_handler(Mock(sizevars=SizeVarAllocator())):
+            if not replayed:
+                with self.assertRaisesRegex(AssertionError, "missing output ownership"):
+                    self._make_sub_parent_value_resolver(
+                        (relation,),
+                        parent_numel=2,
+                        parent_rnumel=16,
+                        output_groups=groups,
+                    )
+                return
             resolver = self._make_sub_parent_value_resolver(
                 (relation,), parent_numel=2, parent_rnumel=16, output_groups=groups
             )
@@ -1335,6 +1360,9 @@ class TestScheduler(TestCase):
         )
         replay_node = Mock(
             read_writes=ReadWrites(OrderedSet([consumer]), OrderedSet(), OrderedSet())
+        )
+        relation = dataclasses.replace(
+            relation, output_group=0, consumer_nodes=(replay_node,)
         )
         graph_handler = Mock(sizevars=SizeVarAllocator())
         kernel = Mock(_load_mask=None, _load_other=None)
