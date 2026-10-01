@@ -4400,14 +4400,7 @@ class InstructionTranslatorBase(
                 if flags & 0x01:
                     defaults = self.pop()
 
-        fn = NestedUserFunctionVariable(
-            fn_name,
-            code,
-            self.f_globals,
-            defaults,
-            kwdefaults,
-            closure,
-        )
+        ann = None
         if annotations:
             if not isinstance(annotations, TupleVariable):
                 raise AssertionError(
@@ -4420,8 +4413,18 @@ class InstructionTranslatorBase(
                 dict(zip(items[::2], items[1::2], strict=True)),
                 mutation_type=ValueMutationNew(),
             )
-            fn.annotations = ann
-        self.push(fn)
+
+        self.push(
+            NestedUserFunctionVariable(
+                fn_name,
+                code,
+                self.f_globals,
+                defaults,
+                kwdefaults,
+                closure,
+                ann,
+            )
+        )
 
     def UNPACK_SEQUENCE(self, inst: Instruction) -> None:
         seq = self.pop()
